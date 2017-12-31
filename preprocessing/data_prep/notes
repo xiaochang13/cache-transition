@@ -1,0 +1,81 @@
+The alignment of the dev seems very bad, maybe better to sample training instances for validation.
+There might be bugs on the dev categorization, need double check that
+
+Goals 03-22:
+1. categorize dev, with DATE, NER, NUMBER, VERBAL. Double check if there is error that might affect the performance.
+double-check train and dev to see if there are silly errors for categorization.
+done
+
+2. rerun dependency parsing on new train and dev
+remains to be done
+
+3. run experiments
+sample part of train as evaluation of each classifier.
+add simple distance features to the parser
+not finished
+
+Goals 03-23
+Refine the categorization, implement the amr restoring function given the new categories.
+read paper first, for Friday's presentation.
+
+Goals 03-24
+Paper discussion
+
+Goals 03-27
+1. Add the new distance features, dependency and word distance. For different classifiers
+2. Run the experiments, add statistics computation for the arc numbers.
+3. Category restoration.
+
+For NUMBER, NER, DATE, VERBAL: there might be some finite set of possible edges.
+If we should add some hard constraint of length.
+
+Just discussed with Dan: add length of dependency features to PushOrPop, if there is dependency left to the right.
+
+compute the arc, distance distribution.
+distance 1: number of arc, ratio
+distance 2: number of arc, ratio
+....
+
+distance concerning dependency tree, need some way of getting this info.
+
+all the dependency features are of wrong index. Needs some modification.
+each dependency tree has added a pseudo first position placeholder as -1, and needs to be taken extreme care of.
+
+Goals 04-01
+dump the feature file for the training data and all the indexers.
+train the model file separately, dump all the parameters 
+evaluate on dev
+
+Goals 04-04
+train perceptron, get the performance for the concept identification
+if a concept has only few occurrances and -NULL- among the choices, should not be unaligned.
+
+Goals 04-08
+dump all the types for each type of concepts: limit the choices the classifier has to make. (maybe also base on frequency)
+
+Goals 04-09
+isolate a few more categories for edges: for example, op_n structure. Should count from 1 to n, so ignore the index.
+
+Goals 04-10
+get the accuracy for each classifier. Especially for arc label
+
+need to refine some categories base on frequency.
+
+currently choosing 100 as the threshold, report what ratio of edge labels appear in the choice set.
+if in frequent set, only choose the incoming and outgoing from the edge collections, otherwise use some dictionary.
+
+ops outgoing edges only chosen for the finite set.
+
+Goals 04-12
+prepare the test data
+get the new ner on the tokenized token file, put it under test_tokenized
+./match.sh: rematch the date entities for test, also put it under test_tokenized, lemmatize, lower case if necessary.
+then run.sh to categorize test data, put it under test_categorized. Then run
+
+Goals 04-13
+prepare all the test necessary files
+
+Goals 04-14
+refine the results. possible improvement: refine phrases, numbers, unaligned concepts for low frequency ones.
+
+After run dependency parse on the test, there is minor difference in the tokenization: sentence 172
