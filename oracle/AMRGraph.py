@@ -1,10 +1,12 @@
 from collections import defaultdict
+import utils
 class ConceptLabel(object):
     def __init__(self, label=None):
         self.value = label
         self.alignments = []
         self.rels = []
         self.rel_map = {}
+        self.par_rel_map = {}
 
         self.tail_ids = []
         self.parent_rels = []
@@ -27,7 +29,15 @@ class ConceptLabel(object):
         n_rels = len(self.parent_rels)
         for i in range(n_rels):
             curr_idx = self.parent_ids[i]
-            self.rel_map[curr_idx] = self.parent_rels[i]
+            self.par_rel_map[curr_idx] = self.parent_rels[i]
+
+    def concept_repr(self, graph):
+        outgoing = []
+        for (idx, l) in enumerate(self.rels):
+            tail = self.tail_ids[idx]
+            outgoing.append("%s:%s" % (l, graph.concepts[tail].value))
+        return "%s %s" % (self.value, " ".join(sorted(outgoing)))
+
 
     def setValue(self, s):
         self.value = s
@@ -39,9 +49,14 @@ class ConceptLabel(object):
         self.alignments.append(word_idx)
 
     def getArc(self, k):
-        if k >= len(self.rels):
-            return None
+        if k >= len(self.rels) or k < 0:
+            return utils.NULL
         return self.rels[k]
+
+    def getParentArc(self, k):
+        if k >= len(self.parent_rels) or k < 0:
+            return utils.NULL
+        return self.parent_rels[k]
 
 class AMRGraph(object):
     def __init__(self):
@@ -49,9 +64,24 @@ class AMRGraph(object):
         self.concepts = []
         self.counter = 0
         self.widToConceptID = {}
+        self.right_edges = defaultdict(list)
         self.toks = None
         self.headToTail = defaultdict(set)
-        self.tailToHead = defaultdict(set)
+
+    def compare(self, other):
+        # return False
+        assert isinstance(other, self.__class__), "Comparing a graph to another class: %s" % other.__class__
+        if self.n != other.n:
+            return False
+        for i in range(self.n):
+            first_concept = self.concepts[i]
+            second_concept = other.concepts[i]
+            first_repr = first_concept.concept_repr(self)
+            second_repr = second_concept.concept_repr(self)
+            if first_repr != second_repr:
+                print "Inconsistent concept at %d: %s vs %s" % (i, first_repr, second_repr)
+                return False
+        return True
 
     def incomingArcs(self, v):
         if v < 0:
@@ -86,11 +116,32 @@ class AMRGraph(object):
         return self.counter
 
     def conceptLabel(self, idx):
+        if idx < 0:
+            return utils.NULL
         concept = self.concepts[idx]
         return concept.getValue()
 
     def getConcept(self, idx):
         return self.concepts[idx]
+
+    def getConceptArc(self, concept_idx, rel_idx, outgoing=True):
+        if concept_idx == -1:
+            return utils.NULL
+        concept = self.getConcept(concept_idx)
+        if outgoing:
+            return concept.getArc(rel_idx)
+        return concept.getParentArc(rel_idx)
+
+    def getConceptArcNum(self, concept_idx, outgoing=True):
+        if concept_idx == -1:
+            return 0
+        concept = self.getConcept(concept_idx)
+        if outgoing:
+            return len(concept.rels)
+        return len(concept.parent_rels)
+
+    def getConceptSeq(self):
+        return [concept.getValue() for concept in self.concepts]
 
     def buildWordToConceptIDX(self):
         """
@@ -114,10 +165,18 @@ class AMRGraph(object):
         return ret
 
     def buildEdgeMap(self):
+        right_edges_list = defaultdict(list)
         for (i, concept) in enumerate(self.concepts):
             for tail_v in concept.tail_ids:
                 self.headToTail[i].add(tail_v)
-                self.tailToHead[tail_v].add(i)
+                if tail_v > i:
+                    right_edges_list[i].append(tail_v)
+                elif tail_v < i:
+                    right_edges_list[tail_v].append(i)
+        for left_idx in right_edges_list:
+            sorted_right_list = sorted(right_edges_list[left_idx])
+            assert sorted_right_list[0] > left_idx
+            self.right_edges[left_idx] = sorted_right_list
 
     def addConcept(self, c):
         self.concepts.append(c)

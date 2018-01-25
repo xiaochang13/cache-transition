@@ -2,6 +2,7 @@
  Represents a partial or complete dependency parse of a sentence, and
  provides convenience methods for analyzing the parse.
 """
+import utils
 class DependencyTree(object):
     # int n;
     # List<Integer> head;
@@ -68,6 +69,15 @@ class DependencyTree(object):
     def getDepDist(self, first_idx, second_idx):
         return self.dist_stats[(first_idx, second_idx)]
 
+    def getDepLabel(self, first_idx, second_idx):
+        if first_idx < 0 or second_idx < 0:
+            return utils.NULL
+        if self.getHead(first_idx) == second_idx:
+            return "L-" + self.getLabel(first_idx)
+        if self.getHead(second_idx) == first_idx:
+            return "R-" + self.getLabel(second_idx)
+        return utils.NULL
+
     def setDependency(self, k, h, label):
         self.head_list[k] = h
         self.label_list[k] = label
@@ -108,24 +118,3 @@ class DependencyTree(object):
                 return False
         return True
 
-    #public void printDep(String[] tokSeq) {
-    #  for (int i = 0; i < this.n; i++) {
-    #    int head = getHead(i);
-    #    System.err.println(i + ", head:" + head);
-    #    String currWord = tokSeq[i];
-    #    String headWord = "Root";
-    #    if (head != -1)
-    #        headWord = tokSeq[head];
-    #    System.err.println("Current word:"+ currWord + ", head word:" + headWord);
-    #    for (int j = i+1; j < this.n; j++) {
-    #      String secondWord = tokSeq[j];
-    #      int dist = this.dists.get(i).get(j);
-    #      System.err.println(currWord + " , "+ secondWord + " distance: "+ dist);
-    #    }
-    #  }
-    #}
-    #public void print() {
-    #  for (int i = 1; i <= n; ++i)
-    #    System.out.println(i + " " + getHead(i) + " " + getLabel(i));
-    #  System.out.println();
-    #}

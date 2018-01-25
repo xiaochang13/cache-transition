@@ -1,5 +1,6 @@
 from collections import defaultdict
 from ioutil import *
+from oracle_data import *
 from cacheTransition import CacheTransition
 from cacheConfiguration import CacheConfiguration
 import time
@@ -34,8 +35,10 @@ class CacheTransitionParser(object):
         os.system("mkdir -p %s" % output_dir)
 
         oracle_output = os.path.join(output_dir, "oracle_output.txt")
+        json_output = os.path.join(output_dir, "oracle_examples100.json")
 
         data_set = loadDataset(data_dir)
+        oracle_set = OracleData()
 
         for tree in data_set.dep_trees:
             tree.buildDepDist(tree.dist_threshold)
@@ -53,6 +56,12 @@ class CacheTransitionParser(object):
 
         cache_transition.makeTransitions()
 
+        push_actions, arc_binary_actions, arc_label_actions = defaultdict(int), defaultdict(int), defaultdict(int)
+        num_pop_actions = 0
+        num_shift_actions = 0
+
+        feat_dim = -1
+
         # Run oracle on the training data.
         with open(oracle_output, 'w') as oracle_wf:
             for sent_idx in range(data_num):
@@ -62,35 +71,44 @@ class CacheTransitionParser(object):
                 amr_graph.initTokens(tok_seq)
                 amr_graph.initLemma(lem_seq)
 
+                if sent_idx >= 100:
+                    break
+
                 length = len(tok_seq)
 
                 c = CacheConfiguration(self.cache_size, length)
                 c.wordSeq, c.lemSeq, c.posSeq = tok_seq, lem_seq, pos_seq
+                concept_seq = amr_graph.getConceptSeq()
                 c.tree = dep_tree
+                c.conceptSeq = concept_seq
                 c.setGold(amr_graph)
 
-                word_idx = 0 # Start processing from leftmost word.
+                feat_seq = []
+
+                word_align = []
+                concept_align = []
+
+                # word_idx = 0 # Start processing from leftmost word.
 
                 start_time = time.time()
 
                 oracle_seq = []
                 succeed = True
 
+                # oracle_example = OracleExample()
+                concept_idx = 0
+
                 while not cache_transition.isTerminal(c):
-                    oracle_action = cache_transition.getOracleAction(c, word_idx)
-                    # print "Current action:", oracle_action
+                    oracle_action = cache_transition.getOracleAction(c)
+                    # print oracle_action
 
-                    # If the next action processes a buffer word.
-                    if "conID" in oracle_action or "conEMP" in oracle_action:
-                        word_idx += 1
-
-                    if time.time() - start_time > 1.0:
+                    if time.time() - start_time > 4.0:
                         print >> sys.stderr, "Overtime sentence #%d" % sent_idx
                         print >> sys.stderr, "Sentence: %s" % " ".join(tok_seq)
                         succeed = False
                         break
 
-                    oracle_seq.append(oracle_action)
+                    word_idx = c.nextBufferElem()
 
                     if "ARC" in oracle_action:
                         parts = oracle_action.split(":")
@@ -99,18 +117,110 @@ class CacheTransitionParser(object):
 
                         for (cache_idx, arc_label) in enumerate(arc_decisions):
                             curr_arc_action = "ARC%d:%s" % (cache_idx, arc_label)
+
+                            shiftpop_feats = c.shiftPopFeatures()
+                            cache_feats = c.getCacheFeat(word_idx, concept_idx, cache_idx)
+                            pushidx_feats = c.pushIDXFeatures()
+
+                            all_feats = shiftpop_feats + cache_feats + pushidx_feats
+
+                            if arc_label == "O":
+                                arc_binary_actions["O"] += 1
+                                feat_seq.append(["PHASE=ARCBINARY"]+ all_feats)
+                                oracle_seq.append("NOARC")
+                                word_align.append(word_idx)
+                                concept_align.append(concept_idx)
+                            else:
+                                arc_binary_actions["Y"] += 1
+                                feat_seq.append(["PHASE=ARCBINARY"]+ all_feats)
+                                oracle_seq.append("ARC")
+                                word_align.append(word_idx)
+                                concept_align.append(concept_idx)
+
+                                feat_seq.append(["PHASE=ARCLABEL"]+ all_feats)
+                                arc_label_actions[arc_label] += 1
+                                oracle_seq.append(arc_label)
+                                word_align.append(word_idx)
+                                concept_align.append(concept_idx)
+                                # print curr_arc_action
+                                # print word_idx, concept_idx, cache_idx
+                                # print feat_seq[-1]
                             cache_transition.apply(c, curr_arc_action)
+
+
                     else:
+                        #Currently assume vertex generated separately.
+                        if "conGen" not in oracle_action and "conID" not in oracle_action:
+                            oracle_seq.append(oracle_action)
+                            word_align.append(word_idx)
+                            concept_align.append(concept_idx)
+                            cache_feats = c.getCacheFeat()
+                            if oracle_action == "POP":
+                                shiftpop_feats = c.shiftPopFeatures(word_idx, concept_idx, True)
+                                pushidx_feats = c.pushIDXFeatures()
+                                phase = "PHASE=SHTPOP"
+                                num_pop_actions += 1
+                            else:
+                                phase = "PHASE=PUSHIDX"
+                                push_actions[oracle_action] += 1
+                                concept_idx += 1
+                                if concept_idx == len(concept_seq):
+                                    concept_idx = -1
+                            all_feats = [phase] + shiftpop_feats + cache_feats + pushidx_feats
+                            feat_seq.append(all_feats)
+                        elif "NULL" not in oracle_action:
+                            #if "PUSH" in oracle_action:
+                            oracle_seq.append("SHIFT")
+                            num_shift_actions += 1
+                            word_align.append(word_idx)
+                            concept_align.append(concept_idx)
+                            shiftpop_feats = c.shiftPopFeatures(word_idx, concept_idx, True)
+                            cache_feats = c.getCacheFeat()
+                            pushidx_feats = c.pushIDXFeatures()
+                            all_feats = shiftpop_feats + cache_feats + pushidx_feats
+                            feat_seq.append(["PHASE=SHTPOP"] + all_feats)
+                            if feat_dim == -1:
+                                feat_dim = len(feat_seq[-1])
                         cache_transition.apply(c, oracle_action)
 
                 if succeed:
+                    assert len(feat_seq) == len(oracle_seq)
+                    for feats in feat_seq:
+                        assert len(feats) == feat_dim, "Feature dimensions not consistent: %s" % str(feats)
+                    oracle_example = OracleExample(tok_seq, lem_seq, pos_seq, concept_seq, feat_seq, oracle_seq,
+                                                   word_align, concept_align)
+                    oracle_set.addExample(oracle_example)
                     print>> oracle_wf, "Sentence #%d: %s" % (sent_idx, " ".join(tok_seq))
-                    print>> oracle_wf, "AMR graph:\n%s" %  str(amr_graph)
+                    print>> oracle_wf, "AMR graph:\n%s" %  str(amr_graph).strip()
+                    print>> oracle_wf, "Constructed AMR graph:\n%s" % str(c.hypothesis).strip()
                     print>> oracle_wf, "Oracle sequence: %s" % " ".join(oracle_seq)
+                    print>> oracle_wf, "Oracle feature sequence: %s" % " ".join(["#".join(feats) for feats
+                                                                                   in feat_seq])
+                    print>> oracle_wf, "Oracle word alignments: %s" % str(word_align)
+                    print>> oracle_wf, "Oracle concept alignments: %s\n" % str(concept_align)
 
-                if sent_idx > 100:
-                    break
+                    if not c.gold.compare(c.hypothesis):
+                        print "Oracle sequence not constructing the gold graph for sentence %d!" % sent_idx
+                        print " ".join(tok_seq)
+                        print str(amr_graph)
+                    else:
+                        print "check okay for sentence %d" % sent_idx
+                else:
+                    print "Failed sentence %d" % sent_idx
+                    print " ".join(tok_seq)
+                    print str(amr_graph)
+                    print "Oracle sequence so far: %s\n" % " ".join(oracle_seq)
+
+
+
             oracle_wf.close()
+
+        saveCounter(arc_binary_actions, "arc_binary_actions.txt")
+        saveCounter(arc_label_actions, "arc_label_actions.txt")
+        saveCounter(push_actions, "pushidx_actions.txt")
+        print "A total of %d shift actions" % num_shift_actions
+        print "A total of %d pop actions" % num_pop_actions
+        oracle_set.toJSON(json_output)
 
     def isPredicate(self, s):
         length = len(s)
@@ -182,5 +292,5 @@ if __name__ == "__main__":
     argparser.add_argument("--cache_size", type=int, default=6, help="Fixed cache size for the transition system.")
 
     args = argparser.parse_args()
-    parser = CacheTransitionParser(6)
+    parser = CacheTransitionParser(args.cache_size)
     parser.OracleExtraction(args.data_dir, args.output_dir)

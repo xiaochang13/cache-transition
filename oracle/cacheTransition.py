@@ -117,15 +117,14 @@ class CacheTransition(object):
             c.hypothesis.count()
             c.start_word = False # Have generated a candidate vertex.
 
-            # Ignore all the arc actions for unaligned concepts.
-            if "conGen" in action and len(c.hypothesis.concepts) < len(c.gold.concepts):
-                c.start_word = True
             if "conID" in action:
                 next_word = c.nextBufferElem()
                 c.cand_vertex = (next_word, new_concept_idx)
-                c.popBuffer()
+                # c.popBuffer()
+                c.pop_buff = True
             else:
                 c.cand_vertex = (-1, new_concept_idx)
+                c.pop_buff = False
             c.last_action = "conID"
         elif "ARC" in action:
             parts = action.split(":")
@@ -145,39 +144,45 @@ class CacheTransition(object):
             c.pushToStack(cache_idx)
             c.moveToCache(c.cand_vertex)
             c.start_word = True
+            if c.pop_buff:
+                c.popBuffer()
 
-    def chooseVertex(self, c, headToTail, tailToHead, widToConceptID):
+    def chooseVertex(self, c, right_edges):
         max_dist = -1
         max_idx = -1
+        next_buffer_concept_idx = c.hypothesis.nextConceptIDX()
         for cache_idx in range(c.cache_size):
             cache_word_idx, cache_concept_idx = c.getCache(cache_idx)
             curr_dist = 1000
             if cache_concept_idx == -1:
                 return cache_idx
-            tail_set = headToTail[cache_concept_idx]
-            head_set = None
-            if cache_concept_idx in tailToHead:
-                head_set = tailToHead[cache_concept_idx]
-            for (buffer_idx, word_idx) in enumerate(c.buffer):
-                if word_idx in widToConceptID:
-                    concept_idx = widToConceptID[word_idx]
-                    if (concept_idx in tail_set or (head_set is not None and concept_idx in head_set)):
-                        curr_dist = buffer_idx
-                        break
+
+            # If no connection to any future vertices.
+            if cache_concept_idx not in right_edges or right_edges[cache_concept_idx][-1] < next_buffer_concept_idx:
+                return cache_idx
+
+            for connect_idx in right_edges[cache_concept_idx]:
+                if connect_idx >= next_buffer_concept_idx:
+                    curr_dist = connect_idx
+                    break
+
+            assert curr_dist != 1000
+
             if curr_dist > max_dist:
                 max_idx = cache_idx
                 max_dist = curr_dist
         return max_idx
 
-    def getOracleAction(self, c, word_idx):
+    def getOracleAction(self, c):
         gold_graph = c.gold
         headToTail = gold_graph.headToTail
-        tailToHead = gold_graph.tailToHead
         widToConceptID = gold_graph.widToConceptID
+        right_edges = gold_graph.right_edges
         if c.start_word and c.needsPop():
             return "POP"
         if c.start_word: # Start processing the next word in buffer.
             concept_idx = -1
+            word_idx = c.nextBufferElem()
             hypo_graph = c.hypothesis
             next_concept_idx = hypo_graph.nextConceptIDX()
             concept_size = len(gold_graph.concepts) # The total number of concepts.
@@ -223,7 +228,7 @@ class CacheTransition(object):
             return "ARC:" + "#".join(arcs)
         if "ARC" in c.last_action:
             c.last_action = "PUSH"
-            cache_idx = self.chooseVertex(c, headToTail, tailToHead, widToConceptID)
+            cache_idx = self.chooseVertex(c, right_edges)
             return "PUSH:%d" % cache_idx
         print>> sys.stderr, "Unable to proceed from last action:" + c.last_action
         sys.exit(1)

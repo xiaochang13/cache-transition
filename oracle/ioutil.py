@@ -4,6 +4,7 @@ from dependency import DependencyTree
 from AMRGraph import *
 NULL = "-NULL-"
 UNKNOWN = "-UNK-"
+from utils import loadDepTokens
 class Dataset(object):
     def __init__(self, tok_thre=1, top_arc=40):
         self.tok_seqs = None
@@ -39,7 +40,7 @@ class Dataset(object):
 
         self.unaligned_set = set()
 
-        self.widToConceptID = {}
+        # self.widToConceptID = {}
 
     def setTok(self, tok_seqs):
         self.tok_seqs = tok_seqs
@@ -217,29 +218,74 @@ def readToks(path):
             tok_seqs.append(toks)
     return tok_seqs
 
-def loadDependency(path, tok_seqs):
+def loadDependency(path, tok_seqs, align=False):
+    def dep_equal(first, second):
+        first_repr = first.replace("`", "\'")
+        second_repr = second.replace("`", "\'")
+        return first_repr == second_repr
+
+    def get_alignmaps():
+        dep_tok_seqs = loadDepTokens(path)
+
+        assert len(tok_seqs) == len(dep_tok_seqs)
+        align_maps = []
+        for (i, tok_seq) in enumerate(tok_seqs):
+            dep_seq = dep_tok_seqs[i]
+            align_map = {}
+            tok_idx = 0
+            curr_repr = ""
+            for (k, dep_tok) in enumerate(dep_seq):
+                curr_repr += dep_tok
+                align_map[k] = tok_idx
+                if dep_equal(curr_repr, tok_seq[tok_idx]):
+                    tok_idx += 1
+                    curr_repr = ""
+            assert tok_idx == len(tok_seq)
+            # print align_map
+            align_maps.append(align_map)
+        return align_maps
+
     dep_trees = []
+    align_maps = None
+    if align:
+        align_maps = get_alignmaps()
     with open(path, "r") as dep_f:
         tree = DependencyTree()
         sent_idx = 0
         tok_idx = 0
+        last_idx = -1
         toks = tok_seqs[sent_idx]
+        align_map = None
+        if align:
+            align_map = align_maps[sent_idx]
         for line in dep_f:
             splits = line.strip().split("\t")
             if len(splits) < 10:
                 dep_trees.append(tree)
+
+                assert len(toks) == len(tree.head_list), "%s %s" % (str(toks), str(tree.head_list))
+
                 tree = DependencyTree()
                 sent_idx += 1
                 if sent_idx < len(tok_seqs):
                     toks = tok_seqs[sent_idx]
+                    align_map = align_maps[sent_idx]
+                    last_idx = -1
             else:
-                word = splits[1]
                 dep_label = splits[7]
                 tok_idx = int(splits[0]) - 1
+
+                if align:
+                    tok_idx = align_map[tok_idx]
+                    if tok_idx == last_idx:
+                        continue
+                    last_idx = tok_idx
                 head_idx = int(splits[6]) - 1 # root becomes -1.
-                if toks[tok_idx] != word:
-                    print >> sys.stderr, word+ " : "+ toks[tok_idx]
-                    sys.exit(1)
+                if align and head_idx >= 0:
+                    head_idx = align_map[head_idx]
+                # if toks[tok_idx] != word:
+                #     print >> sys.stderr, word+ " : "+ toks[tok_idx]
+                #     sys.exit(1)
                 tree.add(head_idx, dep_label)
         dep_f.close()
     return dep_trees
@@ -257,10 +303,10 @@ def loadAMRConll(path):
                 graph.buildEdgeMap()
                 graph.buildWordToConceptIDX()
                 amr_graphs.append(graph)
-                # try:
-                #     assert root_num == 1, "Sentence %d" % sent_idx
-                # except:
-                #     print "sentence %d" % sent_idx
+                try:
+                    assert root_num == 1, "Sentence %d" % sent_idx
+                except:
+                    print "cycle at sentence %d" % sent_idx
                     # print str(graph)
                     # sys.exit(1)
                 graph = AMRGraph()
@@ -270,7 +316,7 @@ def loadAMRConll(path):
                 sent_idx += 1
             else:
                 if len(splits) != 6:
-                    print>> sys.stderr, "Length inconsistent in conll format "+ len(splits)
+                    print>> sys.stderr, "Length inconsistent in conll format %s" % len(splits)
                     print>> sys.stderr, " ".join(splits)
                     sys.exit(1)
                 concept_idx = int(splits[0])
@@ -330,7 +376,7 @@ def loadDataset(path):
     tok_seqs = readToks(tok_file)
     lem_seqs = readToks(lemma_file)
     pos_seqs = readToks(pos_file)
-    dep_trees = loadDependency(dep_file, tok_seqs)
+    dep_trees = loadDependency(dep_file, tok_seqs, True)
     amr_graphs = loadAMRConll(amr_conll_file)
 
     dataset = Dataset()
@@ -341,3 +387,10 @@ def loadDataset(path):
     dataset.setAMRGraphs(amr_graphs)
 
     return dataset
+
+def saveCounter(counts, path):
+    sorted_items = sorted(counts.items(), key=lambda x: -x[1])
+    with open(path, "w") as wf:
+        for (item ,count) in sorted_items:
+            print >>wf, "%s\t%d" % (item, count)
+        wf.close()

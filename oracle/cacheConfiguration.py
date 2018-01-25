@@ -1,6 +1,8 @@
 from collections import deque
 from dependency import *
 from AMRGraph import *
+import utils
+# from utils import Tokentype
 class CacheConfiguration(object):
     def __init__(self, size, length):
         """
@@ -23,6 +25,7 @@ class CacheConfiguration(object):
         self.wordSeq = []
         self.lemSeq = []
         self.posSeq = []
+        self.conceptSeq = []
 
         self.start_word = True # Whether start processing a new word.
         self.tree = DependencyTree()
@@ -30,52 +33,158 @@ class CacheConfiguration(object):
         self.cand_vertex = None
 
         self.last_action = None
+        self.pop_buff = True
 
     def setGold(self, graph_):
         self.gold = graph_
+
+    def getTokenFeats(self, idx, type):
+        if idx < 0:
+            return type.name + ":" + utils.NULL
+        prefix = type.name + ":"
+        if type == utils.Tokentype.WORD:
+            return prefix + self.wordSeq[idx]
+        if type == utils.Tokentype.LEM:
+            return prefix + self.lemSeq[idx]
+        if type == utils.Tokentype.POS:
+            return prefix + self.posSeq[idx]
+        if type == utils.Tokentype.CONCEPT:
+            return prefix + self.conceptSeq[idx]
+
+    def getArcFeats(self, concept_idx, idx, prefix, outgoing=True):
+        arc_label = self.hypothesis.getConceptArc(concept_idx, idx, outgoing)
+        return prefix + arc_label
+
+    def getNumArcFeats(self, concept_idx, prefix, outgoing=True):
+        arc_num = self.hypothesis.getConceptArcNum(concept_idx, outgoing)
+        return "%s%d" % (prefix, arc_num)
+
+    def getDepDistFeats(self, idx1, idx2):
+        prefix = "DepDist="
+        if idx1 < 0 or idx2 < 0:
+            return prefix + utils.NULL
+        dep_dist = self.tree.getDepDist(idx1, idx2)
+        return "%s%d" % (prefix, dep_dist)
+
+    def getTokenDistFeats(self, idx1, idx2, upper, prefix):
+        if idx1 < 0 or idx2 < 0:
+            return prefix + utils.NULL
+        assert idx1 < idx2, "Left token index not smaller than right"
+        token_dist = idx2 - idx1
+        if token_dist > upper:
+            token_dist = upper
+        return "%s%d" % (prefix, token_dist)
+
+    def getTokenTypeFeatures(self, word_idx, concept_idx, feats, prefix=""):
+        word_repr = prefix + self.getTokenFeats(word_idx, utils.Tokentype.WORD)
+        lem_repr = prefix + self.getTokenFeats(word_idx, utils.Tokentype.LEM)
+        pos_repr = prefix + self.getTokenFeats(word_idx, utils.Tokentype.POS)
+        concept_repr = prefix + self.getTokenFeats(concept_idx, utils.Tokentype.CONCEPT)
+        feats.append(word_repr)
+        feats.append(lem_repr)
+        feats.append(pos_repr)
+        feats.append(concept_repr)
+
+    def getConceptRelationFeatures(self, concept_idx, feats):
+        first_concept_arc = self.getArcFeats(concept_idx, 0, "ARC=")
+        second_concept_arc = self.getArcFeats(concept_idx, 1, "ARC=")
+        parent_concept_arc = self.getArcFeats(concept_idx, 0, "PARC=", False)
+        concept_parrel_num = self.getNumArcFeats(concept_idx, "#PARC=", False)
+        feats.append(first_concept_arc)
+        feats.append(second_concept_arc)
+        feats.append(parent_concept_arc)
+        feats.append(concept_parrel_num)
+
+    def getCacheFeat(self, word_idx=-1, concept_idx=-1, idx=-1):
+        if idx == -1:
+            return ["NONE"] * utils.cache_feat_num
+
+        feats = []
+        cache_word_idx, cache_concept_idx = self.getCache(idx)
+
+        # Candidate token features.
+        self.getTokenTypeFeatures(word_idx, concept_idx, feats)
+
+        # Cache token features.
+        self.getTokenTypeFeatures(cache_word_idx, cache_concept_idx, feats)
+
+        # Distance features
+        word_dist_repr = self.getTokenDistFeats(cache_word_idx, word_idx, 4, "WordDist=")
+        concept_dist_repr = self.getTokenDistFeats(cache_concept_idx, concept_idx, 4, "ConceptDist=")
+        dep_dist_repr = self.getDepDistFeats(cache_word_idx, word_idx)
+
+        # Dependency label
+        dep_label_repr = "DepLabel=" + self.tree.getDepLabel(cache_word_idx, word_idx)
+
+        feats.append(word_dist_repr)
+        feats.append(concept_dist_repr)
+        feats.append(dep_dist_repr)
+        feats.append(dep_label_repr)
+
+        # Get arc information for the current concept
+        self.getConceptRelationFeatures(concept_idx, feats)
+
+        self.getConceptRelationFeatures(cache_concept_idx, feats)
+
+        assert len(feats) == utils.cache_feat_num
+        return feats
+
+    def pushIDXFeatures(self, word_idx=-1, concept_idx=-1):
+        if concept_idx == -1:
+            return ["NONE"] * utils.pushidx_feat_num
+        feats = []
+
+        # Candidate vertex features.
+        self.getTokenTypeFeatures(word_idx, concept_idx, feats)
+
+        # Cache vertex features.
+        for cache_idx in range(self.cache_size):
+            cache_word_idx, cache_concept_idx = self.cache[cache_idx]
+            prefix = "cache%d_" % cache_idx
+            self.getTokenTypeFeatures(cache_word_idx, cache_concept_idx, feats, prefix)
+
+        assert len(feats) == utils.pushidx_feat_num
+        return feats
+
+    def shiftPopFeatures(self, word_idx=-1, concept_idx=-1, active=False):
+        if not active:
+            return ["NONE"] * utils.shiftpop_feat_num
+        feats = []
+        rst_word_idx, rst_concept_idx = self.cache[self.cache_size-1]
+        # Right most cache token features
+        self.getTokenTypeFeatures(rst_word_idx, rst_concept_idx, feats, "rst_")
+
+        # Buffer token features
+        self.getTokenTypeFeatures(word_idx, concept_idx, feats, "buf_")
+
+        # Then get the dependency links to right words
+        dep_list = self.bufferDepConnections(rst_word_idx)
+
+        dep_num = len(dep_list)
+        if dep_num > 4:
+            dep_num = 4
+        dep_num_repr = "depnum=%d" % dep_num
+        feats.append(dep_num_repr)
+        for i in range(3):
+            if i >= dep_num:
+                feats.append("dep=" + utils.NULL)
+            else:
+                feats.append("dep=" + dep_list[i])
+
+        assert len(feats) == utils.shiftpop_feat_num
+        return feats
 
     def popBuffer(self):
         self.buffer.popleft()
 
     def nextBufferElem(self):
-        assert len(self.buffer) > 0, "Fetch word from empty buffer."
+        if len(self.buffer) == 0:
+            return -1
+        # assert len(self.buffer) > 0, "Fetch word from empty buffer."
         return self.buffer[0]
 
     def bufferSize(self):
         return len(self.buffer)
-
-    # In oracle extraction, which cache index to push onto stack.
-    def chooseCacheIndex(self):
-        """
-        Oracle extraction for PushIDX: choose a cache vertex that will
-        be least recently used.
-        :return: the cache index of the chosen vertex.
-        """
-        headToTail = self.gold.headToTail
-        tailToHead = self.gold.tailToHead
-        widToConceptID = self.gold.widToConceptID
-        max_dist = -1
-        max_idx = -1
-        for cache_idx in range(self.cache_size):
-            cache_concept_idx = self.cache[cache_idx][1]
-            curr_dist = 1000
-            tail_set = headToTail[cache_concept_idx]
-            head_set = None
-            if cache_concept_idx in tailToHead:
-                head_set = tailToHead[cache_concept_idx]
-            for (buffer_idx, word_idx) in enumerate(self.buffer):
-                if word_idx in widToConceptID:
-                    buffer_concept_id = widToConceptID[word_idx]
-                    if buffer_concept_id in tail_set:
-                        curr_dist = buffer_idx
-                        break
-                    if head_set is not None and buffer_concept_id in head_set:
-                        curr_dist = buffer_idx
-                        break
-            if curr_dist > max_dist:
-                max_idx = cache_idx
-                max_dist = curr_dist
-        return max_idx
 
     def getCache(self, idx):
         if idx < 0 or idx > self.cache_size:
@@ -109,27 +218,26 @@ class CacheConfiguration(object):
         or a vertex from the cache.
         :return:
         """
-        headToTail = self.gold.headToTail
-        tailToHead = self.gold.tailToHead
-        widToConceptID = self.gold.widToConceptID
-
         last_cache_word, last_cache_concept = self.cache[self.cache_size-1]
-        if last_cache_concept == -1: # ($, $) at last cache position.
+        right_edges = self.gold.right_edges
+        # print "Current last cache word %d, cache concept %d" % (last_cache_word, last_cache_concept)
+        # ($, $) at last cache position.
+        if last_cache_concept == -1:
             return False
-        tail_set = headToTail[last_cache_concept]
-        head_set = None
-        if last_cache_concept in tailToHead:
-            head_set = tailToHead[last_cache_concept]
 
-        for (buffer_idx, word_idx) in enumerate(self.buffer):
-            if word_idx in widToConceptID:
-                buffer_concept_id = widToConceptID[word_idx]
-                # If there exists an arc to things in the buffer, no POP operation.
-                if (buffer_concept_id in tail_set or
-                        (head_set is not None and buffer_concept_id in head_set)):
-                    return False
+        next_buffer_concept_idx = self.hypothesis.nextConceptIDX()
+        num_concepts = self.gold.n
+        if next_buffer_concept_idx >= num_concepts:
+            return True
 
-        return True
+        if last_cache_concept not in right_edges:
+            return False
+
+        assert next_buffer_concept_idx > last_cache_concept and num_concepts > last_cache_concept
+
+
+
+        return right_edges[last_cache_concept][-1] < next_buffer_concept_idx
 
     def shiftBuffer(self):
         if len(self.buffer) == 0:
@@ -187,7 +295,7 @@ class CacheConfiguration(object):
                 ret_set.add("R="+self.tree.getLabel(idx))
             elif self.tree.getHead(word_idx) == idx:
                 ret_set.add("L="+self.tree.getLabel(word_idx))
-        return ret_set
+        return list(ret_set)
 
     def bufferDepConnectionNum(self, word_idx, thre=20):
         ret_set = self.bufferDepConnections(word_idx, thre)
