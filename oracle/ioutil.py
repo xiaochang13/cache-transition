@@ -269,7 +269,8 @@ def loadDependency(path, tok_seqs, align=False):
                 sent_idx += 1
                 if sent_idx < len(tok_seqs):
                     toks = tok_seqs[sent_idx]
-                    align_map = align_maps[sent_idx]
+                    if align:
+                        align_map = align_maps[sent_idx]
                     last_idx = -1
             else:
                 dep_label = splits[7]
@@ -376,7 +377,7 @@ def loadDataset(path):
     tok_seqs = readToks(tok_file)
     lem_seqs = readToks(lemma_file)
     pos_seqs = readToks(pos_file)
-    dep_trees = loadDependency(dep_file, tok_seqs, True)
+    dep_trees = loadDependency(dep_file, tok_seqs)
     amr_graphs = loadAMRConll(amr_conll_file)
 
     dataset = Dataset()
