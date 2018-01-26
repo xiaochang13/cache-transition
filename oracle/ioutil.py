@@ -304,12 +304,12 @@ def loadAMRConll(path):
                 graph.buildEdgeMap()
                 graph.buildWordToConceptIDX()
                 amr_graphs.append(graph)
-                try:
-                    assert root_num == 1, "Sentence %d" % sent_idx
-                except:
-                    print "cycle at sentence %d" % sent_idx
-                    # print str(graph)
-                    # sys.exit(1)
+                #try:
+                #    assert root_num == 1, "Sentence %d" % sent_idx
+                #except:
+                #    print "cycle at sentence %d" % sent_idx
+                #    # print str(graph)
+                #    # sys.exit(1)
                 graph = AMRGraph()
                 root_num = 0
             elif len(splits) == 2:  # sentence index
