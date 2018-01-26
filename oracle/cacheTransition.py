@@ -3,7 +3,7 @@ from cacheConfiguration import *
 NULL = "-NULL-"
 UNKNOWN = "-UNK-"
 class CacheTransition(object):
-    def __init__(self, con_labs_, arc_labs_, unalign_labs_, size):
+    def __init__(self, con_labs_, arc_labs_, unalign_labs_, oracle_type_, size):
         self.con_labs = con_labs_
         self.arc_labs = arc_labs_
         self.unalign_labs = unalign_labs_
@@ -18,6 +18,7 @@ class CacheTransition(object):
         self.ne_choices = set()
         self.constInArc_choices = set()
         self.constOutArc_choices = set()
+        self.oracle_type = oracle_type_
 
     def actionNum(self, action_type):
         if action_type == 0:
@@ -114,7 +115,8 @@ class CacheTransition(object):
             new_concept = ConceptLabel(l)
             new_concept_idx = c.hypothesis.nextConceptIDX()
             c.hypothesis.addConcept(new_concept)
-            c.hypothesis.count()
+            if self.oracle_type == utils.OracleType.AAAI:
+                c.hypothesis.count()
             c.start_word = False # Have generated a candidate vertex.
 
             if "conID" in action:
@@ -127,6 +129,7 @@ class CacheTransition(object):
                 c.pop_buff = False
             c.last_action = "conID"
         elif "ARC" in action:
+            assert not c.start_word
             parts = action.split(":")
             cache_idx = int(parts[0][3:])
             arc_label = parts[1]
@@ -138,12 +141,16 @@ class CacheTransition(object):
                 c.connectArc(c.cand_vertex[1], curr_cache_concept_idx, 0, arc_label[2:])
             else:
                 c.connectArc(c.cand_vertex[1], curr_cache_concept_idx, 1, arc_label[2:])
-            c.start_word = False
-        else:
+            # c.start_word = False
+        else: # PUSHx
+            assert not c.start_word
             cache_idx = int(action.split(":")[1])
             c.pushToStack(cache_idx)
             c.moveToCache(c.cand_vertex)
-            c.start_word = True
+
+            # For CL oracle, only move to next concept when the
+            if self.oracle_type == utils.OracleType.CL:
+                c.hypothesis.count()
             if c.pop_buff:
                 c.popBuffer()
 
@@ -181,7 +188,6 @@ class CacheTransition(object):
         if c.start_word and c.needsPop():
             return "POP"
         if c.start_word: # Start processing the next word in buffer.
-            concept_idx = -1
             word_idx = c.nextBufferElem()
             hypo_graph = c.hypothesis
             next_concept_idx = hypo_graph.nextConceptIDX()
@@ -198,11 +204,20 @@ class CacheTransition(object):
                 return action
             c.last_action = "emp"
             return "conID:-NULL-"
-        if c.last_action == "conID":
-            cand_concept_idx = c.cand_vertex[1]
+        if (self.oracle_type == utils.OracleType.AAAI and c.last_action == "conID") or (
+                    self.oracle_type == utils.OracleType.CL and c.last_action == "PUSH"):
             arcs = []
             c.last_action = "ARC"
-            for cache_idx in range(c.cache_size):
+            num_connect = c.cache_size
+
+            # If CL oracle, then connect from the rightmost.
+            if self.oracle_type == utils.OracleType.CL:
+                num_connect -= 1
+                _, cand_concept_idx = c.getCache(num_connect)
+            else:  # Otherwise AAAI oracle, from the generated concept.
+                cand_concept_idx = c.cand_vertex[1]
+
+            for cache_idx in range(num_connect):
                 cache_word_idx, cache_concept_idx = c.getCache(cache_idx)
                 if cache_concept_idx == -1:
                     arcs.append("O")
@@ -226,7 +241,8 @@ class CacheTransition(object):
                 else:
                     arcs.append("O")
             return "ARC:" + "#".join(arcs)
-        if "ARC" in c.last_action:
+        if (self.oracle_type == utils.OracleType.AAAI and "ARC" in c.last_action) or (
+                self.oracle_type == utils.OracleType.CL and c.last_action == "conID"):
             c.last_action = "PUSH"
             cache_idx = self.chooseVertex(c, right_edges)
             return "PUSH:%d" % cache_idx

@@ -11,6 +11,10 @@ class Tokentype(Enum):
     DEP = 5
     ARC = 6
 
+class OracleType(Enum):
+    AAAI = 1
+    CL = 2
+
 shiftpop_feat_num = 12
 cache_feat_num = 20
 pushidx_feat_num = 20

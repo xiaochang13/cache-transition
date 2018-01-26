@@ -29,7 +29,7 @@ class CacheTransitionParser(object):
         self.depIDs = {}
         self.arcIDs = {}
 
-    def OracleExtraction(self, data_dir, output_dir):
+    def OracleExtraction(self, data_dir, output_dir, oracle_type=utils.OracleType.AAAI, use_multiple=False):
         print "Input data directory:", data_dir
         print "Output directory:", output_dir
         os.system("mkdir -p %s" % output_dir)
@@ -52,13 +52,14 @@ class CacheTransitionParser(object):
 
         cache_transition = CacheTransition(
             data_set.known_concepts, data_set.known_rels,
-            data_set.unaligned_set, self.cache_size)
+            data_set.unaligned_set, oracle_type, self.cache_size)
 
         cache_transition.makeTransitions()
 
         push_actions, arc_binary_actions, arc_label_actions = defaultdict(int), defaultdict(int), defaultdict(int)
         num_pop_actions = 0
         num_shift_actions = 0
+        print "Oracle type: %s" % oracle_type.name
 
         feat_dim = -1
 
@@ -71,7 +72,7 @@ class CacheTransitionParser(object):
                 amr_graph.initTokens(tok_seq)
                 amr_graph.initLemma(lem_seq)
 
-                if sent_idx >= 100:
+                if sent_idx >= 2:
                     break
 
                 length = len(tok_seq)
@@ -87,8 +88,6 @@ class CacheTransitionParser(object):
 
                 word_align = []
                 concept_align = []
-
-                # word_idx = 0 # Start processing from leftmost word.
 
                 start_time = time.time()
 
@@ -113,9 +112,16 @@ class CacheTransitionParser(object):
                     if "ARC" in oracle_action:
                         parts = oracle_action.split(":")
                         arc_decisions = parts[1].split("#")
-                        assert len(arc_decisions) == self.cache_size
+                        # assert len(arc_decisions) == self.cache_size
 
-                        for (cache_idx, arc_label) in enumerate(arc_decisions):
+                        num_connect = c.cache_size
+                        if oracle_type == utils.OracleType.CL:
+                            num_connect -= 1
+                            word_idx, curr_concept_idx = c.getCache(num_connect)
+                            assert curr_concept_idx == concept_idx
+
+                        for cache_idx in range(num_connect):
+                            arc_label = arc_decisions[cache_idx]
                             curr_arc_action = "ARC%d:%s" % (cache_idx, arc_label)
 
                             shiftpop_feats = c.shiftPopFeatures()
@@ -142,11 +148,13 @@ class CacheTransitionParser(object):
                                 oracle_seq.append(arc_label)
                                 word_align.append(word_idx)
                                 concept_align.append(concept_idx)
-                                # print curr_arc_action
-                                # print word_idx, concept_idx, cache_idx
-                                # print feat_seq[-1]
-                            cache_transition.apply(c, curr_arc_action)
 
+                            cache_transition.apply(c, curr_arc_action)
+                        if oracle_type == utils.OracleType.CL:
+                            c.start_word = True
+                            concept_idx += 1
+                            if concept_idx == len(concept_seq):
+                                concept_idx = -1
 
                     else:
                         #Currently assume vertex generated separately.
@@ -163,13 +171,13 @@ class CacheTransitionParser(object):
                             else:
                                 phase = "PHASE=PUSHIDX"
                                 push_actions[oracle_action] += 1
-                                concept_idx += 1
-                                if concept_idx == len(concept_seq):
-                                    concept_idx = -1
+                                if oracle_type == utils.OracleType.AAAI:
+                                    concept_idx += 1
+                                    if concept_idx == len(concept_seq):
+                                        concept_idx = -1
                             all_feats = [phase] + shiftpop_feats + cache_feats + pushidx_feats
                             feat_seq.append(all_feats)
                         elif "NULL" not in oracle_action:
-                            #if "PUSH" in oracle_action:
                             oracle_seq.append("SHIFT")
                             num_shift_actions += 1
                             word_align.append(word_idx)
@@ -182,6 +190,8 @@ class CacheTransitionParser(object):
                             if feat_dim == -1:
                                 feat_dim = len(feat_seq[-1])
                         cache_transition.apply(c, oracle_action)
+                        if "PUSH" in oracle_action and oracle_type == utils.OracleType.AAAI:
+                            c.start_word = True
 
                 if succeed:
                     assert len(feat_seq) == len(oracle_seq)
@@ -210,8 +220,6 @@ class CacheTransitionParser(object):
                     print " ".join(tok_seq)
                     print str(amr_graph)
                     print "Oracle sequence so far: %s\n" % " ".join(oracle_seq)
-
-
 
             oracle_wf.close()
 
@@ -289,8 +297,13 @@ if __name__ == "__main__":
 
     argparser.add_argument("--data_dir", type=str, help="The data directory for the input files.")
     argparser.add_argument("--output_dir", type=str, help="The directory for the output files.")
+    argparser.add_argument("--oracle_type", type=str, help="The oracle type.")
     argparser.add_argument("--cache_size", type=int, default=6, help="Fixed cache size for the transition system.")
 
     args = argparser.parse_args()
     parser = CacheTransitionParser(args.cache_size)
-    parser.OracleExtraction(args.data_dir, args.output_dir)
+    if args.oracle_type == "aaai":
+        oracle_type = utils.OracleType.AAAI
+    else:
+        oracle_type = utils.OracleType.CL
+    parser.OracleExtraction(args.data_dir, args.output_dir, oracle_type)
