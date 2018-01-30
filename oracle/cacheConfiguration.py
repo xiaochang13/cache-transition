@@ -231,7 +231,7 @@ class CacheConfiguration(object):
             return True
 
         if last_cache_concept not in right_edges:
-            return False
+            return True
 
         assert next_buffer_concept_idx > last_cache_concept and num_concepts > last_cache_concept
 
